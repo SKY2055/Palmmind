@@ -1,0 +1,45 @@
+# PalmMind - Conversational RAG API
+# Core dependencies for FastAPI backend with multi-provider LLM, Qdrant vector store, and PostgreSQL
+
+# Web Framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.17
+
+# Document Processing
+PyPDF2>=3.0.1
+aiofiles>=24.1.0
+pdf2image>=1.17.0
+pytesseract>=0.3.10
+
+# LangChain & LLM Providers
+langchain>=0.3.0
+langchain-text-splitters>=0.3.0
+langchain-groq>=0.3.0
+langchain-google-genai>=2.0.0
+groq>=0.37.0
+
+# Embeddings
+sentence-transformers>=2.2.0
+transformers>=4.35.0
+huggingface-hub>=0.17.0
+
+# Vector Database
+qdrant-client>=1.12.0
+
+# Database & ORM
+sqlalchemy>=2.0.0
+alembic>=1.14.0
+psycopg2-binary>=2.9.0
+
+# Cache & Memory
+redis>=5.2.0
+
+# Configuration & Environment
+pydantic-settings>=2.6.0
+python-dotenv>=1.0.0
+
+# System Dependencies (install via Homebrew on macOS)
+# - tesseract (OCR engine)
+# - poppler (for pdf2image)
+
