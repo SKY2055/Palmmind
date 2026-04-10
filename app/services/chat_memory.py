@@ -70,6 +70,27 @@ class ChatMemoryService:
                 formatted.append(f"Assistant: {content}")
         return "\n".join(formatted)
 
+    def _get_metadata_key(self, session_id: str) -> str:
+        return f"meta:{session_id}"
+
+    def set_metadata(self, session_id: str, data: Dict):
+        """Store metadata for a session (e.g., last found candidates)."""
+        key = self._get_metadata_key(session_id)
+        self.redis_client.set(key, json.dumps(data), ex=self.ttl)
+
+    def get_metadata(self, session_id: str) -> Optional[Dict]:
+        """Retrieve metadata for a session."""
+        key = self._get_metadata_key(session_id)
+        data = self.redis_client.get(key)
+        if data:
+            return json.loads(data)
+        return None
+
+    def clear_metadata(self, session_id: str):
+        """Clear metadata for a session."""
+        key = self._get_metadata_key(session_id)
+        self.redis_client.delete(key)
+
 
 # Singleton instance
 _chat_memory = None

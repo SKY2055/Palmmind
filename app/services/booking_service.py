@@ -1,3 +1,5 @@
+"""Booking service — extracts and persists interview bookings."""
+
 import uuid
 import re
 import json
@@ -7,35 +9,57 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import InterviewBooking
-from app.services.llm_client import get_llm_client, reset_llm_client
+from app.services.llm_client import get_llm_client
 
 settings = get_settings()
 
-# Force reset LLM client on module load to pick up config changes
-reset_llm_client()
+_BOOKING_KEYWORDS = {"book", "schedule", "interview", "appointment", "reserve"}
+
+_REQUIRED_FIELDS = ("name", "email", "date", "time")
 
 
 class BookingService:
     def __init__(self):
         self.llm_client = get_llm_client(settings)
-    
-    def extract_booking_info(self, text: str, chat_history: str = "", document_context: str = "") -> Optional[Dict]:
-        """Extract interview booking details from text using LLM with fallback."""
-        booking_keywords = ["book", "schedule", "interview", "appointment", "reserve"]
+
+    def extract_booking_info(
+        self,
+        text: str,
+        chat_history: str = "",
+        document_context: str = "",
+    ) -> Optional[Dict]:
+        """
+        Extract interview booking details from *text*.
+
+        Returns one of:
+          • None                          — not a booking request
+          • {"name": …, "email": …, …, "missing_fields": []}   — complete
+          • {"name": …, …, "missing_fields": ["email", …]}      — partial
+        """
         text_lower = text.lower()
-        
-        print(f"[Booking] Checking for booking keywords in: {text_lower[:100]}...")
-        print(f"[Booking] Keywords found: {[kw for kw in booking_keywords if kw in text_lower]}")
-        
-        if not any(keyword in text_lower for keyword in booking_keywords):
-            print(f"[Booking] No booking keywords found, skipping extraction")
+        if not any(kw in text_lower for kw in _BOOKING_KEYWORDS):
             return None
-        
-        context_section = ""
-        if document_context:
-            context_section = f"\n\nDocument Context (use this to find email if not in message):\n{document_context}"
-        
-        prompt = f"""Extract interview booking information from the following text. Return ONLY a JSON object with these fields: name, email, date (YYYY-MM-DD format), time (HH:MM format). If any field is missing, use null.
+
+        context_section = (
+            f"\n\nDocument Context (use to find email/name if absent from message):\n{document_context}"
+            if document_context
+            else ""
+        )
+
+        prompt = f"""Extract interview booking details from the conversation below.
+Return ONLY a raw JSON object — no markdown fences, no explanation.
+
+Schema:
+{{
+  "name":           "<full name or null>",
+  "email":          "<email or null>",
+  "date":           "<YYYY-MM-DD or null>",
+  "time":           "<HH:MM 24h or null>",
+  "missing_fields": ["<field>", ...]   // fields that are null
+}}
+
+If this is NOT a booking request at all, return exactly:
+{{"is_booking": false}}
 
 Chat history:
 {chat_history}
@@ -44,88 +68,52 @@ Chat history:
 Current message:
 {text}
 
-Respond with ONLY a JSON object like:
-{{"name": "John Doe", "email": "john@example.com", "date": "2024-12-25", "time": "14:30"}}
+JSON:"""
 
-If this is NOT a booking request, return: {{"is_booking": false}}"""
+        system_prompt = (
+            "You extract booking information and respond ONLY with a valid JSON object. "
+            "No markdown fences. No extra text."
+        )
 
         try:
-            print(f"[Booking] Attempting LLM extraction...")
-            system_prompt = "You extract booking information. Respond only with valid JSON."
             result = self.llm_client.generate(prompt, system_prompt)
-            
+
             if not result["success"]:
-                print(f"[Booking] All LLM providers failed: {result.get('errors', [])}")
+                print(f"[Booking] LLM failed: {result.get('errors')}; trying regex")
                 return self._extract_with_regex(text)
-            
-            content = result["text"].strip()
-            print(f"[Booking] LLM response: {content[:200]}...")
-            
-            try:
-                data = json.loads(content)
-                print(f"[Booking] Parsed JSON: {data}")
-                if data.get("is_booking") is False:
-                    print(f"[Booking] LLM returned is_booking: false")
-                    return None
-                
-                if all(data.get(field) for field in ["name", "email", "date", "time"]):
-                    print(f"[Booking] All fields present, returning booking data")
-                    return {
-                        "name": data["name"],
-                        "email": data["email"],
-                        "date": data["date"],
-                        "time": data["time"]
-                    }
-                print(f"[Booking] Missing required fields, returning None")
+
+            raw = result["text"].strip()
+            print(f"[Booking] Raw LLM response: {raw[:300]}")
+
+            # ── Strip markdown code fences if the model added them ──
+            raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+            raw = re.sub(r"\s*```$", "", raw)
+            raw = raw.strip()
+
+            data = json.loads(raw)
+
+            if data.get("is_booking") is False:
                 return None
-            except json.JSONDecodeError as e:
-                print(f"[Booking] JSON decode error: {e}, trying regex fallback")
-                return self._extract_with_regex(text)
-                
-        except Exception as e:
-            print(f"[Booking] Error extracting booking info: {e}")
+
+            missing = [f for f in _REQUIRED_FIELDS if not data.get(f)]
+            return {
+                "name":           data.get("name"),
+                "email":          data.get("email"),
+                "date":           data.get("date"),
+                "time":           data.get("time"),
+                "missing_fields": missing,
+            }
+
+        except json.JSONDecodeError as exc:
+            print(f"[Booking] JSON parse error ({exc}); trying regex fallback")
             return self._extract_with_regex(text)
-    
-    def _extract_with_regex(self, text: str) -> Optional[Dict]:
-        """Fallback regex extraction for booking details."""
-        info = {}
-        
-        email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', text)
-        if email_match:
-            info["email"] = email_match.group(0)
-        
-        date_patterns = [
-            r'(\d{4}-\d{2}-\d{2})',
-            r'(\d{2}/\d{2}/\d{4})',
-            r'(\d{2}-\d{2}-\d{4})',
-        ]
-        for pattern in date_patterns:
-            date_match = re.search(pattern, text)
-            if date_match:
-                info["date"] = date_match.group(1)
-                break
-        
-        time_match = re.search(r'(\d{1,2}:\d{2})', text)
-        if time_match:
-            info["time"] = time_match.group(1)
-        
-        name_patterns = [
-            r'[Mm]y name is ([A-Z][a-z]+ [A-Z][a-z]+)',
-            r'[Ii] am ([A-Z][a-z]+ [A-Z][a-z]+)',
-            r'[Nn]ame[\s:]+([A-Z][a-z]+ [A-Z][a-z]+)',
-        ]
-        for pattern in name_patterns:
-            name_match = re.search(pattern, text)
-            if name_match:
-                info["name"] = name_match.group(1)
-                break
-        
-        if all(k in info for k in ["name", "email", "date", "time"]):
-            return info
-        return None
-    
-    def create_booking(self, db: Session, session_id: str, booking_info: Dict) -> InterviewBooking:
-        """Store booking in database."""
+        except Exception as exc:
+            print(f"[Booking] Unexpected error: {exc}; trying regex fallback")
+            return self._extract_with_regex(text)
+
+    def create_booking(
+        self, db: Session, session_id: str, booking_info: Dict
+    ) -> InterviewBooking:
         booking = InterviewBooking(
             id=str(uuid.uuid4()),
             session_id=session_id,
@@ -135,28 +123,30 @@ If this is NOT a booking request, return: {{"is_booking": false}}"""
             time=booking_info["time"],
             status="confirmed",
             created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            updated_at=datetime.utcnow(),
         )
         db.add(booking)
         db.commit()
         db.refresh(booking)
+        print(f"[Booking] Created booking {booking.id} for {booking.name}")
         return booking
-    
-    def get_bookings(self, db: Session, session_id: str = None, email: str = None) -> list:
-        """Get bookings by session or email."""
+
+    def get_bookings(
+        self,
+        db: Session,
+        session_id: Optional[str] = None,
+        email: Optional[str] = None,
+    ) -> list:
         query = db.query(InterviewBooking)
         if session_id:
             query = query.filter(InterviewBooking.session_id == session_id)
-            print(f"[Booking] Querying by session_id: {session_id}")
         if email:
             query = query.filter(InterviewBooking.email == email)
-            print(f"[Booking] Querying by email: {email}")
         results = query.all()
         print(f"[Booking] Found {len(results)} bookings")
         return results
-    
+
     def cancel_booking(self, db: Session, booking_id: str) -> bool:
-        """Cancel a booking."""
         booking = db.query(InterviewBooking).filter(InterviewBooking.id == booking_id).first()
         if booking:
             booking.status = "cancelled"
@@ -165,9 +155,51 @@ If this is NOT a booking request, return: {{"is_booking": false}}"""
             return True
         return False
 
+    def _extract_with_regex(self, text: str) -> Optional[Dict]:
+        """Best-effort regex extraction when LLM fails."""
+        info: Dict[str, Optional[str]] = {
+            "name": None,
+            "email": None,
+            "date": None,
+            "time": None,
+        }
 
-# Singleton
-_booking_service = None
+        # Email
+        m = re.search(r"[\w\.\-]+@[\w\.\-]+\.\w+", text)
+        if m:
+            info["email"] = m.group(0)
+
+        # Date — try ISO first, then common formats
+        for pat in (r"\d{4}-\d{2}-\d{2}", r"\d{2}/\d{2}/\d{4}", r"\d{2}-\d{2}-\d{4}"):
+            m = re.search(pat, text)
+            if m:
+                info["date"] = m.group(0)
+                break
+
+        # Time — HH:MM or H:MM optionally followed by am/pm
+        m = re.search(r"\b(\d{1,2}:\d{2})\s*(?:am|pm)?\b", text, re.IGNORECASE)
+        if m:
+            info["time"] = m.group(1)
+
+        # Name
+        for pat in (
+            r"(?:my name is|i am|name\s*[:\-])\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",
+            r"\b([A-Z][a-z]+\s+[A-Z][a-z]+)\b",
+        ):
+            m = re.search(pat, text, re.IGNORECASE)
+            if m:
+                info["name"] = m.group(1)
+                break
+
+        missing = [f for f in _REQUIRED_FIELDS if not info.get(f)]
+        # Only return something useful if at least one field was found
+        if len(missing) == len(_REQUIRED_FIELDS):
+            return None
+
+        return {**info, "missing_fields": missing}
+
+
+_booking_service: Optional[BookingService] = None
 
 
 def get_booking_service() -> BookingService:

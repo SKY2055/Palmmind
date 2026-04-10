@@ -14,6 +14,7 @@ PalmMind is a production-ready **Retrieval-Augmented Generation (RAG)** API buil
 3. **Book an interview** by simply chatting - "I want to book an interview for tomorrow at 3pm"
 4. **Get AI responses** based ONLY on your uploaded documents (no hallucinations!)
 5. **Handle duplicate names** - Provide email/phone for precise matching when multiple applicants share the same name
+6. **Extract comprehensive information** - Name, Address, Contact, Social Media, Summary, Experience, Projects, Education, Skills, Certifications, Courses, Extra-curricular activities, Hobbies, References
 
 ---
 
@@ -167,11 +168,11 @@ Chat Message → LLM extracts (name, email, date, time) → Save to PostgreSQL
 
 ### Step 1: Install Python & Dependencies
 
-**You need:** Python 3.12 or higher
+**You need:** Python 3.9 or higher
 
 ```bash
 # Check Python version
-python --version  # Should be 3.12+
+python --version  # Should be 3.9+
 
 # Clone the repository
 git clone <repository-url>
@@ -203,11 +204,14 @@ sudo apt-get install tesseract-ocr poppler-utils
 2. Download Poppler from https://github.com/oschwartz10612/poppler-windows
 3. Add both to your system PATH
 
-### Step 2: Start Required Services (Docker)
+### Step 4: Start Docker Services (Qdrant, Redis, PostgreSQL)
 
-**You need:** Docker installed on your computer
+**Before running the FastAPI server, you must start the required Docker services.**
 
-Open a terminal and run these commands:
+**First, make sure Docker Desktop is running:**
+- On macOS: Open Docker Desktop from Applications or run `open /Applications/Docker.app`
+- Wait for the Docker icon to appear in the menu bar
+- Verify Docker is running with `docker version`
 
 ```bash
 # Start Qdrant (Vector Database)
@@ -215,19 +219,8 @@ docker run -d -p 6333:6333 --name qdrant qdrant/qdrant
 
 # Start Redis (Chat Memory)
 docker run -d -p 6379:6379 --name redis redis:7-alpine
-```
 
-**To check if they're running:**
-```bash
-docker ps
-```
-
-You should see both `qdrant` and `redis` containers running.
-
-### Step 3: Set Up PostgreSQL Database
-
-**Option A: Using Docker (Easiest)**
-```bash
+# Start PostgreSQL (Database)
 docker run -d -p 5432:5432 --name postgres \
   -e POSTGRES_USER=postgres \
   -e POSTGRES_PASSWORD=postgres \
@@ -235,13 +228,14 @@ docker run -d -p 5432:5432 --name postgres \
   postgres:15-alpine
 ```
 
-**Option B: Using Local PostgreSQL**
+**To check if they're running:**
 ```bash
-# Create database manually
-createdb palmmind_db
+docker ps
 ```
 
-### Step 4: Configure Environment Variables
+You should see `qdrant`, `redis`, and `postgres` containers running.
+
+### Step 5: Configure Environment Variables
 
 ```bash
 # Copy the example file
@@ -275,7 +269,9 @@ GROQ_API_KEY=gsk_your_actual_key_here
 3. Click "Create API Key"
 4. Copy the key and paste it as `GROQ_API_KEY`
 
-### Step 5: Start the Application
+### Step 6: Start the Application
+
+**IMPORTANT: Make sure all Docker containers (qdrant, redis, postgres) are running before starting the server.**
 
 ```bash
 # Start the FastAPI server
@@ -622,7 +618,9 @@ MAX_CHAT_HISTORY=10
 - **Check terminal logs** to see which LLM provider responded
 - **For duplicate names:** Provide email or phone in your query for precise matching
   - Example: "What are John Doe's certifications? Email: john@example.com"
+  - System now uses email-based matching when email is provided in the query
 - **OCR Support:** System automatically attempts OCR for image-based PDFs if tesseract/poppler are installed
+- **Comprehensive Extraction:** System extracts all resume sections including courses, references, and extra-curricular activities
 
 ---
 
