@@ -1,0 +1,4 @@
+Name: John Doe
+Email: john.python@example.com
+Skills: Python, FastAPI, SQL
+Experience: 5 years at TechCorp
